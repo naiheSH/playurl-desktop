@@ -3,7 +3,10 @@
   "productName": "Playurl",
   "version": "0.1.0",
   "description": "A cross-platform music URL inspector and player.",
-  "author": "naiheSH",
+  "author": {
+    "name": "naiheSH",
+    "email": "naiheSH@users.noreply.github.com"
+  },
   "license": "GPL-3.0-only",
   "main": "out/main/index.js",
   "type": "module",
@@ -61,6 +64,8 @@
     "linux": {
       "icon": "build/icon.png",
       "category": "Audio",
+      "desktopName": "playurl.desktop",
+      "syncDesktopName": true,
       "target": ["AppImage", "deb"],
       "artifactName": "Playurl-${version}-linux-${arch}.${ext}"
     },
