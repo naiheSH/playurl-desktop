@@ -43,6 +43,9 @@ const {
   personalized,
   recommend_resource,
   recommend_songs,
+  toplist,
+  playlist_catlist,
+  top_playlist,
   dj_detail,
   dj_program,
   dj_hot,
@@ -1762,6 +1765,43 @@ async function handleDiscoverHome() {
     playlists: privatePlaylists.concat(publicPlaylists).slice(0, 10),
     podcasts: [],
     updatedAt: Date.now(),
+  };
+}
+
+async function handleDiscoverBrowse(category) {
+  const cat = String(category || '全部').trim() || '全部';
+  const options = { cookie: userCookie, timestamp: Date.now() };
+  const result = await Promise.allSettled([
+    toplist(options),
+    playlist_catlist(options),
+    top_playlist({ ...options, cat, limit: 24, offset: 0, order: 'hot' }),
+  ]);
+  const chartBody = result[0].status === 'fulfilled' && result[0].value && (result[0].value.body || result[0].value) || {};
+  const categoryBody = result[1].status === 'fulfilled' && result[1].value && (result[1].value.body || result[1].value) || {};
+  const playlistBody = result[2].status === 'fulfilled' && result[2].value && (result[2].value.body || result[2].value) || {};
+  const charts = (chartBody.list || chartBody.data || [])
+    .map(item => mapDiscoverPlaylist(item, '排行榜'))
+    .filter(item => item.id && item.name)
+    .slice(0, 18);
+  const seen = new Set();
+  const rawCategories = Array.isArray(categoryBody.sub) ? categoryBody.sub : [];
+  const categories = [{ name: '全部', hot: true }].concat(rawCategories.map(item => ({
+    name: item.name || '',
+    hot: !!item.hot,
+    category: item.category == null ? '' : String(item.category),
+  }))).filter(item => item.name && !seen.has(item.name) && seen.add(item.name));
+  categories.sort((a, b) => Number(b.name === '全部') - Number(a.name === '全部') || Number(b.hot) - Number(a.hot));
+  const playlists = (playlistBody.playlists || playlistBody.data || [])
+    .map(item => mapDiscoverPlaylist(item, cat))
+    .filter(item => item.id && item.name)
+    .slice(0, 24);
+  return {
+    provider: 'netease',
+    category: cat,
+    charts,
+    categories: categories.slice(0, 48),
+    playlists,
+    partial: result.some(item => item.status === 'rejected'),
   };
 }
 
@@ -4898,6 +4938,16 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       console.error('[DiscoverHome]', err);
       sendJSON(res, { error: err.message, loggedIn: false, dailySongs: [], playlists: [], podcasts: [] }, 500);
+    }
+    return;
+  }
+
+  if (pn === '/api/discover/browse') {
+    try {
+      sendJSON(res, await handleDiscoverBrowse(url.searchParams.get('category') || '全部'));
+    } catch (err) {
+      console.error('[DiscoverBrowse]', err);
+      sendJSON(res, { provider: 'netease', error: err.message, charts: [], categories: [], playlists: [] }, 500);
     }
     return;
   }
