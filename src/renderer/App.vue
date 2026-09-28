@@ -55,6 +55,8 @@ const selectedPlaylist = ref<Playlist | null>(null)
 const discoveryOpen = ref(false)
 const discoveryLoading = ref(false)
 const discoveryMessage = ref('')
+const discoveryProvider = ref<MusicProvider>('netease')
+const playlistQuery = ref('')
 const discoveryCategory = ref('全部')
 const discoveryCategories = ref<Array<{ name: string; hot?: boolean }>>([])
 const discoveryCharts = ref<Playlist[]>([])
@@ -164,20 +166,44 @@ async function loadLibrary(): Promise<void> {
   libraryLoading.value = false
 }
 
-async function loadDiscovery(category = discoveryCategory.value): Promise<void> {
+async function loadDiscovery(category = discoveryCategory.value, source = discoveryProvider.value): Promise<void> {
   discoveryOpen.value = true
   libraryOpen.value = false
   discoveryLoading.value = true
+  discoveryProvider.value = source
+  if (source !== 'netease' && category === '全部') category = source === 'kugou' ? '推荐' : '推荐'
   discoveryCategory.value = category
   discoveryMessage.value = `正在加载“${category}”榜单与歌单…`
   try {
-    const body = await getJson(`/api/discover/browse?category=${encodeURIComponent(category)}`)
+    const body = await getJson(`/api/discover/browse?provider=${source}&category=${encodeURIComponent(category)}`)
     discoveryCategories.value = body.categories || []
-    discoveryCharts.value = (body.charts || []).map((item: Record<string, unknown>) => normalizePlaylist(item, 'netease')).filter((item: Playlist) => item.id)
-    discoveryPlaylists.value = (body.playlists || []).map((item: Record<string, unknown>) => normalizePlaylist(item, 'netease')).filter((item: Playlist) => item.id)
-    discoveryMessage.value = `网易云官方榜单 ${discoveryCharts.value.length} 个 · ${category}歌单 ${discoveryPlaylists.value.length} 个`
+    discoveryCharts.value = (body.charts || []).map((item: Record<string, unknown>) => normalizePlaylist(item, source)).filter((item: Playlist) => item.id)
+    discoveryPlaylists.value = (body.playlists || []).map((item: Record<string, unknown>) => normalizePlaylist(item, source)).filter((item: Playlist) => item.id)
+    const sourceName = providers.find(item => item.id === source)?.name || source
+    discoveryMessage.value = body.message || `${sourceName}榜单 ${discoveryCharts.value.length} 个 · 歌单 ${discoveryPlaylists.value.length} 个`
   } catch (error) {
     discoveryMessage.value = error instanceof Error ? error.message : '发现内容加载失败'
+  } finally { discoveryLoading.value = false }
+}
+
+async function switchDiscovery(source: MusicProvider): Promise<void> {
+  playlistQuery.value = ''
+  await loadDiscovery(source === 'netease' ? '全部' : '推荐', source)
+}
+
+async function searchPlaylists(): Promise<void> {
+  const keyword = playlistQuery.value.trim()
+  if (!keyword || discoveryLoading.value) return
+  discoveryLoading.value = true
+  discoveryCharts.value = []
+  discoveryCategories.value = []
+  discoveryMessage.value = `正在搜索“${keyword}”相关歌单…`
+  try {
+    const body = await getJson(`/api/playlists/search?provider=${discoveryProvider.value}&keywords=${encodeURIComponent(keyword)}&limit=24`)
+    discoveryPlaylists.value = (body.playlists || []).map((item: Record<string, unknown>) => normalizePlaylist(item, discoveryProvider.value)).filter((item: Playlist) => item.id)
+    discoveryMessage.value = discoveryPlaylists.value.length ? `找到 ${discoveryPlaylists.value.length} 个相关歌单` : ((body.messages || [])[0] || '没有找到相关歌单')
+  } catch (error) {
+    discoveryMessage.value = error instanceof Error ? error.message : '歌单搜索失败'
   } finally { discoveryLoading.value = false }
 }
 
@@ -355,17 +381,28 @@ onUnmounted(() => clearInterval(loginTimer))
           <div><span class="eyebrow">DISCOVER</span><h2>排行榜与分类</h2><small>{{ discoveryMessage }}</small></div>
           <div><button :disabled="discoveryLoading" @click="loadDiscovery()">{{ discoveryLoading ? '加载中…' : '刷新' }}</button><button @click="discoveryOpen = false">收起</button></div>
         </div>
+        <div class="discover-toolbar">
+          <div class="discover-sources">
+            <button v-for="item in providers.slice(1)" :key="`discover-${item.id}`" :class="{ selected: discoveryProvider === item.id }" @click="switchDiscovery(item.id as MusicProvider)">
+              <span class="provider-mark">{{ item.mark }}</span>{{ item.name }}
+            </button>
+          </div>
+          <form class="playlist-search" @submit.prevent="searchPlaylists">
+            <input v-model="playlistQuery" placeholder="搜索当前平台歌单" />
+            <button :disabled="discoveryLoading || !playlistQuery.trim()">搜索歌单</button>
+          </form>
+        </div>
         <div v-if="discoveryCategories.length" class="category-strip">
           <button v-for="item in discoveryCategories" :key="item.name" :class="{ selected: discoveryCategory === item.name }" @click="loadDiscovery(item.name)">{{ item.name }}<i v-if="item.hot">HOT</i></button>
         </div>
-        <h3 v-if="discoveryCharts.length" class="shelf-title"><span>官方排行榜</span><small>网易云音乐</small></h3>
+        <h3 v-if="discoveryCharts.length" class="shelf-title"><span>官方排行榜</span><small>{{ providers.find(item => item.id === discoveryProvider)?.name }}</small></h3>
         <div v-if="discoveryCharts.length" class="playlist-grid chart-grid">
           <button v-for="item in discoveryCharts" :key="`chart-${item.id}`" class="playlist-card" @click="openPlaylist(item)">
             <span class="playlist-cover" :style="item.cover ? { backgroundImage: `url(${item.cover})` } : {}"><i>榜</i></span>
-            <span class="playlist-copy"><strong>{{ item.name }}</strong><small>排行榜 · {{ item.trackCount || '—' }} 首</small><em>{{ item.creator || '网易云音乐' }}</em></span>
+            <span class="playlist-copy"><strong>{{ item.name }}</strong><small>排行榜 · {{ item.trackCount || '—' }} 首</small><em>{{ item.creator || providers.find(source => source.id === discoveryProvider)?.name }}</em></span>
           </button>
         </div>
-        <h3 v-if="discoveryPlaylists.length" class="shelf-title"><span>{{ discoveryCategory }}歌单</span><small>热门分类</small></h3>
+        <h3 v-if="discoveryPlaylists.length" class="shelf-title"><span>{{ playlistQuery ? `“${playlistQuery}”歌单` : `${discoveryCategory}歌单` }}</span><small>{{ providers.find(item => item.id === discoveryProvider)?.name }}</small></h3>
         <div v-if="discoveryPlaylists.length" class="playlist-grid">
           <button v-for="item in discoveryPlaylists" :key="`discover-${item.id}`" class="playlist-card" @click="openPlaylist(item)">
             <span class="playlist-cover" :style="item.cover ? { backgroundImage: `url(${item.cover})` } : {}"><i>{{ item.name.slice(0, 1) }}</i></span>

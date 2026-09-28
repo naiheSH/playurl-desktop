@@ -2615,6 +2615,35 @@ async function handleQishuiFeed(limit, cookieText) {
   return fetchQishuiFeedSongs(Math.max(1, Math.min(18, Number(limit) || 8)), cookieText);
 }
 
+async function handleQishuiPlaylistSearch(keywords, limit, cookieText) {
+  const cookie = normalizeQishuiCookieInput(cookieText);
+  const query = normalizeText(keywords);
+  const count = Math.max(1, Math.min(30, Number(limit) || 20));
+  if (!query) return { provider: 'qishui', loggedIn: qishuiCookieHasLogin(cookie), playlists: [] };
+  if (!qishuiCookieHasLogin(cookie)) {
+    return {
+      provider: 'qishui', loggedIn: false, playlists: [], error: 'QISHUI_COOKIE_REQUIRED',
+      message: '汽水歌单搜索需要先登录汽水音乐。',
+    };
+  }
+  const json = await qishuiWebRequestJson('/luna/pc/search/playlist', qishuiPcAppParams({
+    q: query,
+    cursor: '0',
+    count,
+    search_method: 'input',
+  }), cookie, {
+    bases: [QISHUI_WEB_PC_API_BASE],
+    noDefaultParams: true,
+    sessionOnly: true,
+    pcApp: true,
+    timeoutMs: 8500,
+  });
+  return {
+    provider: 'qishui', loggedIn: true, source: 'qishui-pc-playlist-search',
+    playlists: extractQishuiPlaylistCards(json).slice(0, count),
+  };
+}
+
 function buildQishuiFeedPlaylist(songs) {
   songs = Array.isArray(songs) ? songs : [];
   const firstCover = songs.map(song => song && song.cover).find(Boolean) || '';
@@ -3524,6 +3553,7 @@ module.exports = {
   clearQishuiAccessToken,
   handleQishuiSearch,
   handleQishuiFeed,
+  handleQishuiPlaylistSearch,
   handleQishuiUserPlaylists,
   handleQishuiPlaylistTracks,
   handleQishuiCheckTracksLiked,

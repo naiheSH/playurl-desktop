@@ -1749,6 +1749,95 @@ function mapKugouPlaylistTrack(item) {
   return mapped;
 }
 
+function kugouPublicImage(value) {
+  return String(value || '').replace(/^http:/i, 'https:').replace('{size}', '400');
+}
+
+function mapKugouPublicPlaylist(item, fallbackCreator) {
+  const mapped = mapKugouPlaylistItem(item);
+  mapped.id = item.specialid ? ('kugou-special:' + item.specialid) : String(mapped.id || '');
+  mapped.cover = kugouPublicImage(item.imgurl || item.banner7url || item.banner_9 || item.img_9 || mapped.cover);
+  mapped.creator = mapped.creator || fallbackCreator || '酷狗音乐';
+  mapped.trackCount = Number(item.songcount || item.count || mapped.trackCount || 0) || 0;
+  mapped.playCount = Number(item.playcount || item.play_times || 0) || 0;
+  return mapped;
+}
+
+async function handleKugouPlaylistSearch(keywords, limit) {
+  const query = String(keywords || '').trim();
+  const count = Math.max(1, Math.min(30, Number(limit) || 20));
+  if (!query) return { provider: 'kugou', playlists: [] };
+  const target = new URL('http://mobilecdn.kugou.com/api/v3/search/special');
+  target.searchParams.set('format', 'json');
+  target.searchParams.set('keyword', query);
+  target.searchParams.set('page', '1');
+  target.searchParams.set('pagesize', String(count));
+  const json = await requestJson(target.toString(), { headers: { 'User-Agent': KUGOU_H5_UA } });
+  const rows = json && json.data && Array.isArray(json.data.info) ? json.data.info : [];
+  return { provider: 'kugou', playlists: rows.map(item => mapKugouPublicPlaylist(item, '酷狗歌单')).filter(item => item.id) };
+}
+
+async function handleKugouDiscover(category) {
+  const selected = String(category || '推荐').trim() || '推荐';
+  const categories = ['推荐', '华语', '流行', '摇滚', '民谣', '电子', '说唱', '古风', '治愈', '学习', '运动', '怀旧']
+    .map((name, index) => ({ name, hot: index < 4 }));
+  const [rankJson, searchResult] = await Promise.all([
+    requestJson('http://mobilecdnbj.kugou.com/api/v3/rank/list?withsong=1&format=json', { headers: { 'User-Agent': KUGOU_H5_UA } }),
+    handleKugouPlaylistSearch(selected === '推荐' ? '热门' : selected, 24),
+  ]);
+  const ranks = rankJson && rankJson.data && Array.isArray(rankJson.data.info) ? rankJson.data.info : [];
+  return {
+    provider: 'kugou', category: selected, categories,
+    charts: ranks.filter(item => item.rankid && !item.haschildren).slice(0, 18).map(item => ({
+      provider: 'kugou', source: 'kugou', id: 'kugou-rank:' + item.rankid,
+      name: stripKugouHtml(item.rankname || '酷狗榜单'),
+      cover: kugouPublicImage(item.banner7url || item.banner_9 || item.img_9 || item.album_img_9),
+      creator: '酷狗音乐', trackCount: Number(item.songnum || item.count || 0) || 0,
+    })),
+    playlists: searchResult.playlists || [],
+    supports: { charts: true, categories: true, playlistSearch: true },
+  };
+}
+
+async function handleKugouPublicPlaylistTracks(playlistId, opts) {
+  const raw = String(playlistId || '').trim();
+  const rankMatch = raw.match(/^kugou-rank:(\d+)$/);
+  const specialMatch = raw.match(/^kugou-special:(\d+)$/);
+  const pagesize = Math.max(1, Math.min(50, Number(opts && opts.limit) || 50));
+  const offset = Math.max(0, Number(opts && opts.offset) || 0);
+  const page = Math.floor(offset / pagesize) + 1;
+  const target = new URL(rankMatch
+    ? 'http://mobilecdnbj.kugou.com/api/v3/rank/song'
+    : 'http://mobilecdn.kugou.com/api/v3/special/song');
+  target.searchParams.set('format', 'json');
+  target.searchParams.set('page', String(page));
+  target.searchParams.set('pagesize', String(pagesize));
+  if (rankMatch) {
+    target.searchParams.set('rankid', rankMatch[1]);
+    target.searchParams.set('volid', '0');
+  } else {
+    target.searchParams.set('specialid', specialMatch ? specialMatch[1] : parseKugouListId(raw));
+  }
+  const json = await requestJson(target.toString(), { headers: { 'User-Agent': KUGOU_H5_UA } });
+  const data = json && json.data || {};
+  const rows = Array.isArray(data.info) ? data.info : [];
+  const tracks = rows.map(item => {
+    const filename = stripKugouHtml(item.filename || item.songname || item.name || '');
+    const separator = filename.indexOf(' - ');
+    const artist = item.singername || item.author_name || (Array.isArray(item.authors) ? item.authors.map(author => author.author_name || author.name).filter(Boolean).join(' / ') : '') || (separator > 0 ? filename.slice(0, separator) : '');
+    const name = item.name || (separator > 0 ? filename.slice(separator + 3) : filename);
+    return mapKugouPlaylistTrack(Object.assign({}, item, {
+      name,
+      SingerName: artist,
+      HQFileHash: item['320hash'] || item.hqhash || item.HQFileHash,
+      SQFileHash: item.sqhash || item.SQFileHash,
+      ResFileHash: item.hires_hash || item.ResFileHash,
+    }));
+  }).filter(song => song.name && (song.hash || song.id));
+  const total = Number(data.total || 0) || tracks.length;
+  return { provider: 'kugou', tracks, total, offset, limit: pagesize, nextOffset: offset + tracks.length, hasMore: offset + tracks.length < total };
+}
+
 async function handleKugouUserPlaylists(cookie) {
   const auth = extractKugouAuth(cookie);
   if (!auth.playbackReady) {
@@ -1802,6 +1891,9 @@ async function handleKugouUserPlaylists(cookie) {
 }
 
 async function handleKugouPlaylistTracks(playlistId, cookie, opts = {}) {
+  if (/^kugou-(?:rank|special):\d+$/.test(String(playlistId || '')) || !extractKugouAuth(cookie).playbackReady) {
+    return handleKugouPublicPlaylistTracks(playlistId, opts);
+  }
   const auth = extractKugouAuth(cookie);
   if (!auth.playbackReady) {
     return { provider: 'kugou', tracks: [], total: 0, error: 'KUGOU_AUTH_REQUIRED', message: '酷狗登录未完成' };
@@ -2230,6 +2322,8 @@ module.exports = {
   handleKugouLyric,
   handleKugouGuessLike,
   handleKugouUserPlaylists,
+  handleKugouDiscover,
+  handleKugouPlaylistSearch,
   handleKugouPlaylistTracks,
   handleKugouLikeCheck,
   handleKugouLikeToggle,

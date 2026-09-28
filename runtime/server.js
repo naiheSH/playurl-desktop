@@ -82,6 +82,8 @@ const {
   handleKugouLyric,
   handleKugouGuessLike,
   handleKugouUserPlaylists,
+  handleKugouDiscover,
+  handleKugouPlaylistSearch,
   handleKugouPlaylistTracks,
   handleKugouLikeCheck,
   handleKugouLikeToggle,
@@ -101,6 +103,7 @@ const {
   clearQishuiAccessToken,
   handleQishuiSearch,
   handleQishuiFeed,
+  handleQishuiPlaylistSearch,
   handleQishuiUserPlaylists,
   handleQishuiPlaylistTracks,
   handleQishuiCheckTracksLiked,
@@ -1805,6 +1808,16 @@ async function handleDiscoverBrowse(category) {
   };
 }
 
+async function handleNeteasePlaylistSearch(keywords, limit) {
+  const query = String(keywords || '').trim();
+  const count = Math.max(1, Math.min(30, Number(limit) || 20));
+  if (!query) return { provider: 'netease', playlists: [] };
+  const response = await cloudsearch({ keywords: query, type: 1000, limit: count, offset: 0, cookie: userCookie, timestamp: Date.now() });
+  const body = response && (response.body || response) || {};
+  const rows = body.result && Array.isArray(body.result.playlists) ? body.result.playlists : [];
+  return { provider: 'netease', playlists: rows.map(item => mapDiscoverPlaylist(item, '歌单搜索')).filter(item => item.id && item.name) };
+}
+
 const QQ_MUSICU_URL = 'https://u.y.qq.com/cgi-bin/musicu.fcg';
 const QQ_SMARTBOX_URL = 'https://c.y.qq.com/splcloud/fcgi-bin/smartbox_new.fcg';
 const QQ_HEADERS = {
@@ -3031,6 +3044,90 @@ function mapQQPlaylistTrack(raw) {
   };
 }
 
+function qqDiscoveryComm() {
+  const cookieObj = qqCookieObject();
+  const uin = qqCookieUin(cookieObj);
+  const musicKey = qqCookiePlaybackKey(cookieObj);
+  const comm = { uin: uin || 0, format: 'json', ct: musicKey ? 19 : 24, cv: 0 };
+  if (musicKey) comm.authst = musicKey;
+  return comm;
+}
+
+function qqPlaylistCandidates(value, out, depth) {
+  out = out || [];
+  depth = depth || 0;
+  if (!value || depth > 7) return out;
+  if (Array.isArray(value)) {
+    value.forEach(item => qqPlaylistCandidates(item, out, depth + 1));
+    return out;
+  }
+  if (typeof value !== 'object') return out;
+  const basic = value.basic || value.playlist || value.v_playlist || value;
+  const id = basic.tid || basic.dissid || basic.id || basic.playlistId || basic.content_id;
+  const name = basic.title || basic.name || basic.diss_name || basic.dissname;
+  if (id && name) out.push(basic);
+  Object.keys(value).slice(0, 80).forEach(key => qqPlaylistCandidates(value[key], out, depth + 1));
+  return out;
+}
+
+function mapQQDiscoveryPlaylist(raw, creator) {
+  raw = raw || {};
+  const creatorValue = raw.creator || raw.user || {};
+  const coverValue = raw.cover || {};
+  const title = String(raw.title || raw.name || raw.diss_name || raw.dissname || 'QQ 音乐歌单')
+    .replace(/&#124;/g, '|').replace(/&#32;/g, ' ').replace(/&amp;/g, '&');
+  return {
+    provider: 'qq', source: 'qq', id: String(raw.tid || raw.dissid || raw.id || raw.playlistId || raw.content_id || ''),
+    name: title,
+    cover: (typeof coverValue === 'string' ? coverValue : (coverValue.medium_url || coverValue.default_url || coverValue.small_url || '')) || raw.cover_url_medium || raw.cover_url_big || raw.picurl || raw.imgurl || raw.logo || raw.frontPicUrl || '',
+    trackCount: Number(raw.songNum || raw.songnum || raw.song_cnt || raw.total_song_num || 0) || 0,
+    playCount: Number(raw.listenNum || raw.listen_num || raw.visitnum || 0) || 0,
+    creator: creatorValue.name || creatorValue.nick || raw.nickname || creator || 'QQ 音乐',
+  };
+}
+
+async function handleQQDiscover() {
+  const [chartJson, feedJson] = await Promise.all([
+    qqMusicRequest({ comm: qqDiscoveryComm(), toplists: { module: 'music.musicToplist.Toplist', method: 'GetAll', param: {} } }, { cookie: true }),
+    qqMusicRequest({ comm: { ct: 24, cv: 0 }, feed: { module: 'music.playlist.PlaylistSquare', method: 'GetRecommendFeed', param: { From: 0, Size: 24 } } }, { cookie: true }),
+  ]);
+  const chartGroups = chartJson && chartJson.toplists && chartJson.toplists.data && chartJson.toplists.data.group || [];
+  const charts = [];
+  chartGroups.forEach(group => (group.toplist || group.list || []).forEach(item => charts.push({
+    provider: 'qq', source: 'qq', id: 'qq-toplist:' + (item.topId || item.topid || item.id),
+    name: item.title || item.name || 'QQ 音乐榜',
+    cover: item.frontPicUrl || item.headPicUrl || item.picUrl || item.cover || '',
+    trackCount: Number(item.songNum || item.songnum || 0) || 0,
+    playCount: Number(item.listenNum || item.listen_num || 0) || 0,
+    creator: 'QQ 音乐',
+  })));
+  const seen = new Set();
+  const playlists = qqPlaylistCandidates(feedJson && feedJson.feed && feedJson.feed.data || feedJson)
+    .map(item => mapQQDiscoveryPlaylist(item, 'QQ 音乐推荐'))
+    .filter(item => item.id && !seen.has(item.id) && seen.add(item.id)).slice(0, 24);
+  return {
+    provider: 'qq', category: '推荐', charts: charts.filter(item => !item.id.endsWith('undefined')).slice(0, 18), playlists,
+    categories: [{ name: '推荐', hot: true }],
+    supports: { charts: true, categories: false, playlistSearch: true },
+    message: 'QQ 音乐提供官方榜单与推荐歌单；公开分类标签当前不可稳定读取。',
+  };
+}
+
+async function handleQQPlaylistSearch(keywords, limit) {
+  const query = String(keywords || '').trim();
+  const count = Math.max(1, Math.min(30, Number(limit) || 20));
+  if (!query) return { provider: 'qq', playlists: [] };
+  const json = await qqGetJSON('https://c.y.qq.com/soso/fcgi-bin/client_music_search_songlist', {
+    remoteplace: 'txt.yqq.playlist', searchid: Date.now(), query, page_no: 0, num_per_page: count,
+    format: 'json', inCharset: 'utf8', outCharset: 'utf-8', platform: 'yqq.json', needNewCode: 0,
+  }, { headers: { Referer: 'https://y.qq.com/' } });
+  const seen = new Set();
+  const playlists = qqPlaylistCandidates(json && json.data && json.data.list || json)
+    .map(item => mapQQDiscoveryPlaylist(item, 'QQ 音乐'))
+    .filter(item => item.id && !seen.has(item.id) && seen.add(item.id)).slice(0, count);
+  return { provider: 'qq', playlists };
+}
+
 const QQ_PLAYLIST_SYNC_PAGE_SIZE = 200;
 const QQ_PLAYLIST_SYNC_MAX_PAGES = 25;
 
@@ -3238,20 +3335,39 @@ async function handleQQUserPlaylists() {
 
 async function handleQQPlaylistTracks(id, opts) {
   opts = opts || {};
-  const info = await getQQLoginInfo();
-  if (!info.loggedIn || !info.userId) return { loggedIn: false, provider: 'qq', tracks: [] };
   const pid = String(id || '').trim();
-  if (!pid) return { loggedIn: true, provider: 'qq', error: 'Missing QQ playlist id', tracks: [] };
-  if (isQQLikedPlaylistId(pid)) return handleQQLikedPlaylistTracks(info, opts);
+  const chartMatch = pid.match(/^qq-toplist:(\d+)$/);
   const pageLimit = Math.max(0, Math.min(500, parseInt(opts.limit || '0', 10) || 0));
   const pageOffset = Math.max(0, parseInt(opts.offset || '0', 10) || 0);
+  if (chartMatch) {
+    const json = await qqMusicRequest({
+      comm: qqDiscoveryComm(),
+      toplist: {
+        module: 'music.musicToplist.Toplist', method: 'GetDetail',
+        param: { topId: Number(chartMatch[1]), offset: pageOffset, num: pageLimit || 50, withTags: true },
+      },
+    }, { cookie: true });
+    const block = json && json.toplist || {};
+    const data = block.data || {};
+    const rawTracks = data.songInfoList || data.songlist || data.list || [];
+    const tracks = rawTracks.map(mapQQPlaylistTrack).filter(song => song.name && (song.mid || song.id));
+    const total = Number(data.totalNum || data.total || 0) || tracks.length;
+    return { loggedIn: !!qqCookie, provider: 'qq', playlist: { provider: 'qq', id: pid, name: data.title || 'QQ 音乐榜' }, tracks, total, offset: pageOffset, limit: pageLimit || tracks.length, nextOffset: pageOffset + tracks.length, hasMore: pageOffset + tracks.length < total };
+  }
+  const info = await getQQLoginInfo();
+  const requestUserId = info.userId || '0';
+  if (!pid) return { loggedIn: true, provider: 'qq', error: 'Missing QQ playlist id', tracks: [] };
+  if (isQQLikedPlaylistId(pid)) {
+    if (!info.loggedIn || !info.userId) return { loggedIn: false, provider: 'qq', tracks: [] };
+    return handleQQLikedPlaylistTracks(info, opts);
+  }
   const result = await qqGetJSON('https://c.y.qq.com/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg', {
     type: 1,
     utf8: 1,
     disstid: pid,
     song_begin: pageOffset,
     song_num: pageLimit || undefined,
-    loginUin: info.userId,
+    loginUin: requestUserId,
     format: 'json',
     inCharset: 'utf8',
     outCharset: 'utf-8',
@@ -3277,7 +3393,7 @@ async function handleQQPlaylistTracks(id, opts) {
     trackCount: total,
   };
   return {
-    loggedIn: true,
+    loggedIn: !!info.loggedIn,
     provider: 'qq',
     playlist,
     tracks,
@@ -4944,10 +5060,43 @@ const server = http.createServer(async (req, res) => {
 
   if (pn === '/api/discover/browse') {
     try {
-      sendJSON(res, await handleDiscoverBrowse(url.searchParams.get('category') || '全部'));
+      const source = String(url.searchParams.get('provider') || 'netease');
+      const category = url.searchParams.get('category') || (source === 'kugou' ? '推荐' : '全部');
+      if (source === 'qq') sendJSON(res, await handleQQDiscover());
+      else if (source === 'kugou') sendJSON(res, await handleKugouDiscover(category));
+      else if (source === 'qishui') {
+        const library = await handleQishuiUserPlaylists(qishuiCookie);
+        sendJSON(res, {
+          provider: 'qishui', category: '推荐', charts: [], categories: [], playlists: library.playlists || [],
+          supports: { charts: false, categories: false, playlistSearch: true }, loggedIn: !!library.loggedIn,
+          message: library.loggedIn ? '汽水音乐未开放稳定的排行榜与分类接口，当前显示账号歌单和官方推荐。' : '登录汽水音乐后可读取推荐歌单并搜索歌单；平台暂无公开排行榜分类。',
+        });
+      } else sendJSON(res, await handleDiscoverBrowse(category));
     } catch (err) {
       console.error('[DiscoverBrowse]', err);
-      sendJSON(res, { provider: 'netease', error: err.message, charts: [], categories: [], playlists: [] }, 500);
+      sendJSON(res, { provider: url.searchParams.get('provider') || 'netease', error: err.message, charts: [], categories: [], playlists: [] }, 500);
+    }
+    return;
+  }
+
+  if (pn === '/api/playlists/search') {
+    const keywords = url.searchParams.get('keywords') || url.searchParams.get('q') || '';
+    const source = String(url.searchParams.get('provider') || 'all');
+    const limit = Math.max(1, Math.min(30, parseInt(url.searchParams.get('limit') || '20', 10) || 20));
+    try {
+      const jobs = {
+        netease: () => handleNeteasePlaylistSearch(keywords, limit),
+        qq: () => handleQQPlaylistSearch(keywords, limit),
+        kugou: () => handleKugouPlaylistSearch(keywords, limit),
+        qishui: () => handleQishuiPlaylistSearch(keywords, limit, qishuiCookie),
+      };
+      const ids = source === 'all' ? Object.keys(jobs) : [source];
+      const results = await Promise.allSettled(ids.filter(id => jobs[id]).map(id => jobs[id]()));
+      const playlists = results.flatMap(result => result.status === 'fulfilled' ? (result.value.playlists || []) : []);
+      const messages = results.flatMap(result => result.status === 'fulfilled' && result.value.message ? [result.value.message] : []);
+      sendJSON(res, { provider: source, playlists, messages, partial: results.some(result => result.status === 'rejected') });
+    } catch (err) {
+      sendJSON(res, { provider: source, error: err.message, playlists: [] }, 500);
     }
     return;
   }
