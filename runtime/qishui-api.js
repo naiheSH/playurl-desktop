@@ -25,6 +25,7 @@ const QISHUI_WEB_API_BASES = (process.env.QISHUI_WEB_API_BASES || 'https://api5-
   .map(item => item.trim().replace(/\/+$/, ''))
   .filter(Boolean);
 const QISHUI_WEB_PC_API_BASE = (process.env.QISHUI_WEB_PC_API_BASE || 'https://api.qishui.com').replace(/\/+$/, '');
+const QISHUI_LUNA_API_BASE = (process.env.QISHUI_LUNA_API_BASE || 'https://beta-luna.douyin.com').replace(/\/+$/, '');
 const QISHUI_PUBLIC_HEADERS = {
   'Accept': 'application/json,text/plain,*/*',
   'User-Agent': 'Mineradio/2.1.0 (Qishui public catalog bridge)',
@@ -2644,6 +2645,71 @@ async function handleQishuiPlaylistSearch(keywords, limit, cookieText) {
   };
 }
 
+async function qishuiLunaPost(apiPath, payload, cookieText) {
+  const cookie = normalizeQishuiCookieInput(cookieText);
+  const body = JSON.stringify(payload || {});
+  return requestJson(QISHUI_LUNA_API_BASE + apiPath, {
+    method: 'POST',
+    timeoutMs: 10000,
+    headers: Object.assign({
+      'Accept': 'application/json,text/plain,*/*',
+      'Content-Type': 'application/json; charset=utf-8',
+      'Content-Length': Buffer.byteLength(body),
+      'User-Agent': 'Luna/19.1.0 Android',
+    }, cookie ? { Cookie: cookie } : {}),
+  }, body);
+}
+
+function extractQishuiRadioCards(payload) {
+  const blocks = payload && Array.isArray(payload.blocks) ? payload.blocks : [];
+  const out = [];
+  const seen = new Set();
+  blocks.forEach(block => {
+    const inner = Array.isArray(block && block.inner_block) ? block.inner_block : [];
+    inner.forEach(card => {
+      if (!card || card.type !== 'discover_radio') return;
+      const resource = Array.isArray(card.resources) ? card.resources[0] : null;
+      const style = resource && resource.style || {};
+      const id = normalizeText(resource && (resource.resource_id || resource.id) || card.inner_block_id);
+      if (!id || seen.has(id)) return;
+      seen.add(id);
+      out.push({
+        provider: 'qishui', source: 'qishui', type: 'radio', id: 'qishui-radio:' + id,
+        name: normalizeText(card.title || style.title || '汽水电台'),
+        cover: qishuiFirstImageUrl('~c5_300x300.jpg', style.cover_url_list, style.cover_url),
+        trackCount: 0,
+        creator: normalizeText(style.desc || '汽水音乐电台'),
+        virtual: true,
+      });
+    });
+  });
+  return out;
+}
+
+async function handleQishuiDiscover(cookieText) {
+  const results = await Promise.allSettled([
+    qishuiLunaPost('/luna/discover/mix', { count: 24 }, cookieText),
+    qishuiLunaPost('/luna/discover', { first_request: true }, cookieText),
+  ]);
+  const mix = results[0].status === 'fulfilled' ? results[0].value : {};
+  const discover = results[1].status === 'fulfilled' ? results[1].value : {};
+  const playlists = extractQishuiPlaylistCards(mix).slice(0, 24).map(item => Object.assign({}, item, {
+    id: 'qishui-public:' + item.id,
+    subscribed: false,
+    virtual: true,
+    webSession: false,
+  }));
+  const radios = extractQishuiRadioCards(discover).slice(0, 18);
+  return {
+    provider: 'qishui', loggedIn: qishuiCookieHasLogin(cookieText), category: '推荐',
+    charts: [], categories: [],
+    playlists, radios,
+    supports: { charts: false, categories: false, playlistSearch: true, radio: true },
+    message: `汽水推荐歌单 ${playlists.length} 个 · 电台 ${radios.length} 个；平台暂无公开官方排行榜。`,
+    partial: results.some(result => result.status === 'rejected'),
+  };
+}
+
 function buildQishuiFeedPlaylist(songs) {
   songs = Array.isArray(songs) ? songs : [];
   const firstCover = songs.map(song => song && song.cover).find(Boolean) || '';
@@ -2757,6 +2823,32 @@ async function handleQishuiPlaylistTracks(playlistId, opts, cookieText) {
   const id = normalizeText(String(playlistId || '').replace(/^qishui:/i, ''));
   const limit = Math.max(1, Math.min(50, Number(opts.limit) || 50));
   const offset = Math.max(0, Number(opts.offset) || 0);
+  const radioMatch = String(playlistId || '').match(/^qishui-radio:(\d+)$/i);
+  if (radioMatch) {
+    const json = await qishuiLunaPost('/luna/feed/radio/tracks', {
+      radio_id: radioMatch[1], count: limit, cursor: '',
+    }, cookieText);
+    const rawItems = Array.isArray(json && json.items) ? json.items : [];
+    const tracks = mapQishuiMediaList(rawItems, 'radio', { directPlayable: !!status.webSession }).slice(offset, offset + limit);
+    return {
+      provider: 'qishui', loggedIn: !!status.webSession, playlist: { provider: 'qishui', id: String(playlistId), name: '汽水电台' },
+      tracks, total: tracks.length, offset, limit, nextOffset: offset + tracks.length, hasMore: !!(json && json.has_more),
+    };
+  }
+  const publicPlaylistMatch = String(playlistId || '').match(/^qishui-public:(\d+)$/i);
+  if (publicPlaylistMatch) {
+    const json = await qishuiLunaPost('/luna/playlist/detail', {
+      playlist_id: publicPlaylistMatch[1], count: limit, cursor: '',
+    }, cookieText);
+    const rawItems = Array.isArray(json && json.media_resources) ? json.media_resources : [];
+    const tracks = mapQishuiMediaList(rawItems, 'playlist', { directPlayable: !!status.webSession }).slice(offset, offset + limit);
+    return {
+      provider: 'qishui', loggedIn: !!status.webSession,
+      playlist: { provider: 'qishui', id: String(playlistId), name: qishuiPlaylistNameFromItem(json && json.playlist) || '汽水推荐歌单' },
+      tracks, total: Number(json && json.playlist && json.playlist.count_tracks || 0) || tracks.length,
+      offset, limit, nextOffset: offset + tracks.length, hasMore: !!(json && json.has_more),
+    };
+  }
   if (status.webSession) {
     if (id === QISHUI_WEB_LIKED_PLAYLIST_ID || id === 'liked' || id === 'favorite') {
       const library = await fetchQishuiWebLibrary(cookieText);
@@ -3554,6 +3646,7 @@ module.exports = {
   handleQishuiSearch,
   handleQishuiFeed,
   handleQishuiPlaylistSearch,
+  handleQishuiDiscover,
   handleQishuiUserPlaylists,
   handleQishuiPlaylistTracks,
   handleQishuiCheckTracksLiked,

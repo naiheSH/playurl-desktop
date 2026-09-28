@@ -104,6 +104,7 @@ const {
   handleQishuiSearch,
   handleQishuiFeed,
   handleQishuiPlaylistSearch,
+  handleQishuiDiscover,
   handleQishuiUserPlaylists,
   handleQishuiPlaylistTracks,
   handleQishuiCheckTracksLiked,
@@ -5065,12 +5066,13 @@ const server = http.createServer(async (req, res) => {
       if (source === 'qq') sendJSON(res, await handleQQDiscover());
       else if (source === 'kugou') sendJSON(res, await handleKugouDiscover(category));
       else if (source === 'qishui') {
-        const library = await handleQishuiUserPlaylists(qishuiCookie);
-        sendJSON(res, {
-          provider: 'qishui', category: '推荐', charts: [], categories: [], playlists: library.playlists || [],
-          supports: { charts: false, categories: false, playlistSearch: true }, loggedIn: !!library.loggedIn,
-          message: library.loggedIn ? '汽水音乐未开放稳定的排行榜与分类接口，当前显示账号歌单和官方推荐。' : '登录汽水音乐后可读取推荐歌单并搜索歌单；平台暂无公开排行榜分类。',
-        });
+        const discovery = await handleQishuiDiscover(qishuiCookie);
+        if (discovery.loggedIn) {
+          const library = await handleQishuiUserPlaylists(qishuiCookie).catch(() => ({ playlists: [] }));
+          const seen = new Set((discovery.playlists || []).map(item => String(item.id)));
+          discovery.accountPlaylists = (library.playlists || []).filter(item => item.id && !seen.has(String(item.id)));
+        }
+        sendJSON(res, discovery);
       } else sendJSON(res, await handleDiscoverBrowse(category));
     } catch (err) {
       console.error('[DiscoverBrowse]', err);

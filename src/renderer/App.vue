@@ -61,6 +61,8 @@ const discoveryCategory = ref('全部')
 const discoveryCategories = ref<Array<{ name: string; hot?: boolean }>>([])
 const discoveryCharts = ref<Playlist[]>([])
 const discoveryPlaylists = ref<Playlist[]>([])
+const discoveryRadios = ref<Playlist[]>([])
+const discoveryAccountPlaylists = ref<Playlist[]>([])
 const now = ref<(Song & { url: string; actualQuality: string; trial: boolean }) | null>(null)
 const audio = ref<HTMLAudioElement | null>(null)
 const login = ref({ open: false, qr: '', token: '', status: '' })
@@ -179,6 +181,8 @@ async function loadDiscovery(category = discoveryCategory.value, source = discov
     discoveryCategories.value = body.categories || []
     discoveryCharts.value = (body.charts || []).map((item: Record<string, unknown>) => normalizePlaylist(item, source)).filter((item: Playlist) => item.id)
     discoveryPlaylists.value = (body.playlists || []).map((item: Record<string, unknown>) => normalizePlaylist(item, source)).filter((item: Playlist) => item.id)
+    discoveryRadios.value = (body.radios || []).map((item: Record<string, unknown>) => normalizePlaylist(item, source)).filter((item: Playlist) => item.id)
+    discoveryAccountPlaylists.value = (body.accountPlaylists || []).map((item: Record<string, unknown>) => normalizePlaylist(item, source)).filter((item: Playlist) => item.id)
     const sourceName = providers.find(item => item.id === source)?.name || source
     discoveryMessage.value = body.message || `${sourceName}榜单 ${discoveryCharts.value.length} 个 · 歌单 ${discoveryPlaylists.value.length} 个`
   } catch (error) {
@@ -197,6 +201,8 @@ async function searchPlaylists(): Promise<void> {
   discoveryLoading.value = true
   discoveryCharts.value = []
   discoveryCategories.value = []
+  discoveryRadios.value = []
+  discoveryAccountPlaylists.value = []
   discoveryMessage.value = `正在搜索“${keyword}”相关歌单…`
   try {
     const body = await getJson(`/api/playlists/search?provider=${discoveryProvider.value}&keywords=${encodeURIComponent(keyword)}&limit=24`)
@@ -409,7 +415,23 @@ onUnmounted(() => clearInterval(loginTimer))
             <span class="playlist-copy"><strong>{{ item.name }}</strong><small>{{ item.trackCount || '—' }} 首</small><em>{{ item.creator || discoveryCategory }}</em></span>
           </button>
         </div>
-        <div v-if="!discoveryLoading && !discoveryCharts.length && !discoveryPlaylists.length" class="library-empty">{{ discoveryMessage }}</div>
+        <h3 v-if="discoveryRadios.length" class="shelf-title"><span>汽水电台</span><small>无需登录即可浏览</small></h3>
+        <div v-if="discoveryRadios.length" class="playlist-grid chart-grid">
+          <button v-for="item in discoveryRadios" :key="`radio-${item.id}`" class="playlist-card" @click="openPlaylist(item)">
+            <span class="playlist-cover radio-cover" :style="item.cover ? { backgroundImage: `url(${item.cover})` } : {}"><i>FM</i></span>
+            <span class="playlist-copy"><strong>{{ item.name }}</strong><small>汽水音乐电台</small><em>{{ item.creator || '连续推荐' }}</em></span>
+          </button>
+        </div>
+        <template v-if="discoveryAccountPlaylists.length">
+          <h3 class="shelf-title"><span>我的汽水歌单</span><small>当前登录账号</small></h3>
+          <div class="playlist-grid">
+            <button v-for="item in discoveryAccountPlaylists" :key="`account-${item.id}`" class="playlist-card" @click="openPlaylist(item)">
+              <span class="playlist-cover" :style="item.cover ? { backgroundImage: `url(${item.cover})` } : {}"><i>{{ item.name.slice(0, 1) }}</i></span>
+              <span class="playlist-copy"><strong>{{ item.name }}</strong><small>{{ item.trackCount || '—' }} 首</small><em>{{ item.creator || '我的汽水歌单' }}</em></span>
+            </button>
+          </div>
+        </template>
+        <div v-if="!discoveryLoading && !discoveryCharts.length && !discoveryPlaylists.length && !discoveryRadios.length && !discoveryAccountPlaylists.length" class="library-empty">{{ discoveryMessage }}</div>
       </section>
 
       <section v-if="libraryOpen" class="library-panel">
