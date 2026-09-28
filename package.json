@@ -1,0 +1,72 @@
+{
+  "name": "playurl-desktop",
+  "productName": "Playurl",
+  "version": "0.1.0",
+  "description": "A cross-platform music URL inspector and player.",
+  "author": "naiheSH",
+  "license": "GPL-3.0-only",
+  "main": "out/main/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "vue-tsc --noEmit && electron-vite build",
+    "package": "npm run build && electron-builder --publish never",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "NeteaseCloudMusicApi": "^4.32.0",
+    "qrcode": "^1.5.4",
+    "vue": "^3.5.22"
+  },
+  "overrides": {
+    "music-metadata": "11.14.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.1",
+    "@vue/tsconfig": "^0.8.1",
+    "electron": "^42.4.1",
+    "electron-builder": "^26.0.12",
+    "electron-vite": "^4.0.1",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.7",
+    "vitest": "^3.2.4",
+    "vue-tsc": "^3.0.8"
+  },
+  "build": {
+    "appId": "io.github.naihe.playurl",
+    "productName": "Playurl",
+    "asar": true,
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "out/**/*",
+      "runtime/**/*",
+      "package.json",
+      "LICENSE"
+    ],
+    "mac": {
+      "category": "public.app-category.music",
+      "icon": "build/icon.png",
+      "identity": null,
+      "target": ["dmg"],
+      "artifactName": "Playurl-${version}-mac-${arch}.${ext}"
+    },
+    "win": {
+      "icon": "build/icon.ico",
+      "target": ["nsis"],
+      "artifactName": "Playurl-${version}-windows-${arch}.${ext}"
+    },
+    "linux": {
+      "icon": "build/icon.png",
+      "category": "Audio",
+      "target": ["AppImage", "deb"],
+      "artifactName": "Playurl-${version}-linux-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
