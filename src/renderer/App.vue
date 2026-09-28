@@ -119,6 +119,20 @@ function entitled(id: MusicProvider, quality: Quality): boolean {
   return quality.required === 'VIP' ? Boolean(account.isVip || account.isSvip) : Boolean(account.isSvip)
 }
 
+function accessLabel(song: Song): string {
+  if (stateFor(song).trial) return '试听'
+  return { free: '非 VIP', vip: 'VIP', svip: 'SVIP', paid: '需购买', unknown: '权益未知' }[song.accessTier]
+}
+
+function accessTitle(song: Song): string {
+  if (stateFor(song).trial) return '当前接口只返回试听片段'
+  if (song.accessTier === 'free') return '平台版权字段显示该歌曲无需会员即可播放；具体音质仍以接口结果为准'
+  if (song.accessTier === 'vip') return '平台版权字段显示完整播放需要 VIP 权益'
+  if (song.accessTier === 'svip') return '平台版权字段显示完整播放需要 SVIP 权益'
+  if (song.accessTier === 'paid') return '该歌曲可能需要单独购买，不等同于普通 VIP 曲目'
+  return '平台没有返回足够的版权字段，解析 URL 后才能进一步确认'
+}
+
 async function searchOne(id: MusicProvider): Promise<Song[]> {
   const params = new URLSearchParams({ keywords: query.value.trim(), limit: '12' })
   const body = await getJson(`${endpointFor(id, 'search')}?${params}`)
@@ -332,9 +346,10 @@ async function pollQishuiLogin(): Promise<void> {
 
 function closeLogin(): void { clearInterval(loginTimer); login.value.open = false }
 function clock(value: number): string {
-  const seconds = value > 10000 ? value / 1000 : value
+  const seconds = value / 1000
   if (!Number.isFinite(seconds) || seconds <= 0) return '—:—'
-  return `${Math.floor(seconds / 60)}:${String(Math.round(seconds % 60)).padStart(2, '0')}`
+  const total = Math.round(seconds)
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
 }
 
 onMounted(async () => {
@@ -455,9 +470,9 @@ onUnmounted(() => clearInterval(loginTimer))
             <div class="song-summary">
               <span class="index">{{ String(index + 1).padStart(2, '0') }}</span>
               <span class="cover" :style="song.cover ? { backgroundImage: `url(${song.cover})` } : {}"><i>{{ song.name.slice(0, 1) }}</i></span>
-              <span class="song-copy"><strong>{{ song.name }}</strong><small>{{ song.artist }} · {{ song.album || '未知专辑' }}</small></span>
+              <span class="song-copy"><strong>{{ song.name }} <em :class="['access-badge', song.accessTier, { trial: stateFor(song).trial }]" :title="accessTitle(song)">{{ accessLabel(song) }}</em></strong><small>{{ song.artist }} · {{ song.album || '未知专辑' }}</small></span>
               <span class="source">{{ providers.find(item => item.id === song.provider)?.name }}</span>
-              <span class="duration">{{ clock(song.duration) }}</span>
+              <span class="duration" :title="`音频时长 ${clock(song.duration)}`">{{ clock(song.duration) }}</span>
             </div>
             <div class="song-controls">
               <div class="row-qualities">

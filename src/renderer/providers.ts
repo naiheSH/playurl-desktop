@@ -8,6 +8,7 @@ export type Song = Record<string, unknown> & {
   album: string
   cover: string
   duration: number
+  accessTier: 'free' | 'vip' | 'svip' | 'paid' | 'unknown'
 }
 
 export type Playlist = Record<string, unknown> & {
@@ -41,6 +42,28 @@ export function text(value: unknown): string {
   return typeof value === 'string' || typeof value === 'number' ? String(value) : ''
 }
 
+export function normalizeAccessTier(raw: Record<string, any>, source: Exclude<Provider, 'all'>): Song['accessTier'] {
+  const restriction = raw.restriction && typeof raw.restriction === 'object' ? raw.restriction : {}
+  const required = text(raw.requiredTier || raw.required_tier || restriction.requiredTier || restriction.required_tier).toLowerCase()
+  if (raw.svipRequired === true || raw.only_svip_playable === true || required === 'svip') return 'svip'
+  if (raw.vipRequired === true || raw.only_vip_playable === true || required === 'vip') return 'vip'
+  const feeValue = raw.fee ?? raw.payPlay ?? raw.pay_play
+  if (feeValue !== undefined && feeValue !== null && feeValue !== '') {
+    const fee = Number(feeValue)
+    if (source === 'netease' && fee === 4) return 'paid'
+    if (Number.isFinite(fee)) return fee > 0 ? 'vip' : 'free'
+  }
+  if (source === 'kugou' && raw.privilege !== undefined) return Number(raw.privilege) >= 10 ? 'vip' : 'free'
+  return 'unknown'
+}
+
+export function normalizeDurationMs(raw: Record<string, any>, source: Exclude<Provider, 'all'>): number {
+  if (raw.dt !== undefined) return Math.max(0, Number(raw.dt) || 0)
+  if (raw.interval !== undefined && raw.duration === undefined) return Math.max(0, (Number(raw.interval) || 0) * 1000)
+  const duration = Math.max(0, Number(raw.duration || 0) || 0)
+  return source === 'qishui' && duration > 0 && duration < 10000 ? duration * 1000 : duration
+}
+
 export function normalizeSong(raw: Record<string, any>, source: Exclude<Provider, 'all'>): Song {
   const artists = raw.artists || raw.ar || raw.singer || raw.singers || raw.author || raw.artist
   const albumValue = raw.album || raw.al
@@ -52,7 +75,8 @@ export function normalizeSong(raw: Record<string, any>, source: Exclude<Provider
     artist: text(artists) || '未知歌手',
     album: typeof albumValue === 'object' ? text(albumValue?.name) : text(albumValue),
     cover: text(raw.cover || raw.picUrl || raw.pic || raw.albumCover || albumValue?.picUrl || albumValue?.cover),
-    duration: Number(raw.duration || raw.dt || raw.interval || 0)
+    duration: normalizeDurationMs(raw, source),
+    accessTier: normalizeAccessTier(raw, source)
   }
 }
 

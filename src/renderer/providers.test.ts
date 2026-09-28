@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { endpointFor, normalizePlaylist, normalizeSong, playlistEndpointFor } from './providers'
+import { endpointFor, normalizeAccessTier, normalizeDurationMs, normalizePlaylist, normalizeSong, playlistEndpointFor } from './providers'
 
 describe('provider adapters', () => {
   it('maps provider routes without exposing implementation details to the UI', () => {
@@ -23,5 +23,17 @@ describe('provider adapters', () => {
     expect(normalizePlaylist({ disstid: 8, diss_name: '我的收藏', song_cnt: 21 }, 'qq')).toMatchObject({
       provider: 'qq', id: '8', name: '我的收藏', trackCount: 21
     })
+  })
+
+  it('normalizes provider-specific playback rights without guessing from login state', () => {
+    expect(normalizeAccessTier({ fee: 0 }, 'netease')).toBe('free')
+    expect(normalizeAccessTier({ fee: 1 }, 'qq')).toBe('vip')
+    expect(normalizeAccessTier({ fee: 4 }, 'netease')).toBe('paid')
+    expect(normalizeAccessTier({ requiredTier: 'svip' }, 'qishui')).toBe('svip')
+    expect(normalizeAccessTier({ privilege: 8 }, 'kugou')).toBe('free')
+    expect(normalizeAccessTier({}, 'qq')).toBe('unknown')
+    expect(normalizeDurationMs({ duration: 193 }, 'qishui')).toBe(193000)
+    expect(normalizeDurationMs({ duration: 193000 }, 'qq')).toBe(193000)
+    expect(normalizeDurationMs({ interval: 193 }, 'qq')).toBe(193000)
   })
 })
