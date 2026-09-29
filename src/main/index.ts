@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url'
 type Provider = 'netease' | 'qq' | 'kugou' | 'qishui'
 
 let apiBase = ''
+let mainWindow: BrowserWindow | null = null
 
 function runtimePath(...parts: string[]): string {
   return join(app.getAppPath(), 'runtime', ...parts)
@@ -207,6 +208,14 @@ async function openLogin(provider: Provider): Promise<{ ok: boolean; message: st
 }
 
 function createWindow(): void {
+  if (!app.isReady()) return
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.show()
+    mainWindow.focus()
+    return
+  }
+
   const window = new BrowserWindow({
     width: 1320, height: 860, minWidth: 980, minHeight: 680,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
@@ -222,17 +231,29 @@ function createWindow(): void {
     void shell.openExternal(url)
     return { action: 'deny' }
   })
+  mainWindow = window
+  window.on('closed', () => {
+    if (mainWindow === window) mainWindow = null
+  })
   if (process.env.ELECTRON_RENDERER_URL) void window.loadURL(process.env.ELECTRON_RENDERER_URL)
   else void window.loadFile(join(__dirname, '../renderer/index.html'))
 }
 
-app.whenReady().then(async () => {
-  apiBase = await startApi()
-  ipcMain.handle('app:config', () => ({ apiBase, platform: process.platform, version: app.getVersion() }))
-  ipcMain.handle('app:copy', (_event, value: string) => clipboard.writeText(String(value || '')))
-  ipcMain.handle('app:login', (_event, provider: Provider) => openLogin(provider))
-  createWindow()
-  app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
-})
+const hasSingleInstanceLock = app.requestSingleInstanceLock()
 
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
+if (!hasSingleInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => createWindow())
+
+  app.whenReady().then(async () => {
+    apiBase = await startApi()
+    ipcMain.handle('app:config', () => ({ apiBase, platform: process.platform, version: app.getVersion() }))
+    ipcMain.handle('app:copy', (_event, value: string) => clipboard.writeText(String(value || '')))
+    ipcMain.handle('app:login', (_event, provider: Provider) => openLogin(provider))
+    createWindow()
+    app.on('activate', () => createWindow())
+  })
+
+  app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
+}
