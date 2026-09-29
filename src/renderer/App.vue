@@ -107,6 +107,17 @@ function selectQuality(song: Song, id: string): void {
   state.trial = false
 }
 
+function qualityIdFromResponse(value: unknown): string {
+  const level = text(value).toLowerCase().replace(/[-_\s]/g, '')
+  if (/jymaster|master|studio/.test(level)) return 'jymaster'
+  if (/hires|highresolution/.test(level)) return 'hires'
+  if (/lossless|flac|sq/.test(level)) return 'lossless'
+  if (/exhigh|higher|highest|320|hq/.test(level)) return 'exhigh'
+  if (/aac/.test(level)) return 'aac'
+  if (/standard|medium|normal|128/.test(level)) return 'standard'
+  return ''
+}
+
 function accountLabel(id: MusicProvider): string {
   const account = accounts.value[id]
   if (!account.loggedIn) return '登录'
@@ -117,6 +128,21 @@ function entitled(id: MusicProvider, quality: Quality): boolean {
   if (!quality.required) return true
   const account = accounts.value[id]
   return quality.required === 'VIP' ? Boolean(account.isVip || account.isSvip) : Boolean(account.isSvip)
+}
+
+function qualityAvailable(song: Song, quality: Quality): boolean {
+  const account = accounts.value[song.provider]
+  if (song.provider === 'qishui' && !account.loggedIn) return false
+  if (!quality.required) return true
+  if (!account.loggedIn) return false
+  return quality.required === 'VIP' ? Boolean(account.isVip || account.isSvip) : Boolean(account.isSvip)
+}
+
+function qualityTitle(song: Song, quality: Quality): string {
+  const base = `${quality.name} · ${quality.detail}`
+  if (qualityAvailable(song, quality)) return `${base} · 当前账号可尝试，最终以歌曲接口实时返回为准`
+  if (song.provider === 'qishui' && !accounts.value.qishui.loggedIn) return `${base} · 汽水播放地址需要先登录`
+  return `${base} · 需要当前平台${quality.required || '登录'}权益`
 }
 
 function accessLabel(song: Song): string {
@@ -147,6 +173,7 @@ async function runSearch(): Promise<void> {
   for (const key of Object.keys(rows)) delete rows[key]
   message.value = `正在${activeProviderName.value}中寻找…`
   try {
+    await refreshAccounts()
     const targets: MusicProvider[] = provider.value === 'all' ? ['netease', 'qq', 'kugou', 'qishui'] : [provider.value]
     const results = await Promise.allSettled(targets.map(searchOne))
     songs.value = results.flatMap((item) => item.status === 'fulfilled' ? item.value : [])
@@ -235,6 +262,7 @@ async function openPlaylist(item: Playlist): Promise<void> {
   for (const key of Object.keys(rows)) delete rows[key]
   message.value = `正在加载《${item.name}》…`
   try {
+    await refreshAccounts()
     const params = new URLSearchParams({ id: item.id, limit: '50', offset: '0' })
     const body = await getJson(`${playlistEndpointFor(item.provider, 'tracks')}?${params}`)
     songs.value = (body.tracks || body.songs || []).map((song: Record<string, unknown>) => normalizeSong(song, item.provider)).filter((song: Song) => song.id)
@@ -271,6 +299,8 @@ async function resolveSong(song: Song, action: 'play' | 'copy'): Promise<void> {
       state.url = url
       state.actual = text(body.quality || body.level || body.requestedQuality || state.quality)
       state.trial = Boolean(body.trial)
+      const actualId = qualityIdFromResponse(body.quality || body.level)
+      if (actualId && qualitiesFor(song).some((item) => item.id === actualId)) state.quality = actualId
     }
     if (action === 'copy') {
       await window.playurl.copy(state.url)
@@ -308,6 +338,12 @@ async function refreshAccounts(): Promise<void> {
       }
     } catch { accounts.value[id] = { loggedIn: false } }
   }))
+  songs.value.forEach((song) => {
+    const state = rows[rowKey(song)]
+    if (!state) return
+    const selected = qualitiesFor(song).find((item) => item.id === state.quality)
+    if (selected && !qualityAvailable(song, selected)) selectQuality(song, defaultQuality(song.provider))
+  })
 }
 
 async function beginLogin(id: MusicProvider): Promise<void> {
@@ -476,7 +512,7 @@ onUnmounted(() => clearInterval(loginTimer))
             </div>
             <div class="song-controls">
               <div class="row-qualities">
-                <button v-for="item in qualitiesFor(song)" :key="item.id" :class="{ selected: stateFor(song).quality === item.id, entitled: entitled(song.provider, item) }" :title="`${item.name} · ${item.detail}${item.required ? ` · ${item.required}` : ''}`" @click="selectQuality(song, item.id)">
+                <button v-for="item in qualitiesFor(song)" :key="item.id" :disabled="!qualityAvailable(song, item)" :class="{ selected: stateFor(song).quality === item.id, entitled: entitled(song.provider, item), locked: !qualityAvailable(song, item) }" :title="qualityTitle(song, item)" @click="selectQuality(song, item.id)">
                   <span>{{ item.name }}</span><em v-if="item.required">{{ item.required }}</em>
                 </button>
               </div>
