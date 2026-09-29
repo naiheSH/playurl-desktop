@@ -3272,17 +3272,17 @@ function extractQishuiLyrics(payload) {
   return found;
 }
 
-async function fetchQishuiSeoTrack(trackId) {
+async function fetchQishuiSeoTrack(trackId, cookieText) {
   return requestJson(urlWithParams('https://beta-luna.douyin.com/luna/h5/seo_track', {
     track_id: trackId,
     device_platform: 'web',
   }), {
     timeoutMs: 8000,
-    headers: {
+    headers: qishuiHeadersWithCookie({
       'Accept': 'application/json,text/plain,*/*',
       'User-Agent': QISHUI_WEB_UA,
       'Referer': 'https://www.douyin.com/',
-    },
+    }, cookieText),
   });
 }
 
@@ -3336,7 +3336,17 @@ async function handleQishuiLyric(id, cookieText) {
 
 function qishuiPrimaryTrackFromV2(payload) {
   const data = (payload && payload.data) || payload || {};
-  return pickObject(data.track, data.track_info, data.trackInfo, payload && payload.track, payload && payload.track_info, payload && payload.trackInfo);
+  return pickObject(
+    data.track,
+    data.track_info,
+    data.trackInfo,
+    data.seo_track && data.seo_track.track,
+    data.seoTrack && data.seoTrack.track,
+    payload && payload.track,
+    payload && payload.track_info,
+    payload && payload.trackInfo,
+    payload && payload.seo_track && payload.seo_track.track
+  );
 }
 
 function qishuiTrackPlayerFromV2(payload, track) {
@@ -3505,9 +3515,16 @@ async function handleQishuiSongUrl(opts, cookieText) {
   }
   const requestedQuality = normalizeText(opts.quality || '');
   let payload;
+  let playbackSource = 'qishui-pc-track-v2';
+  let trackV2Error = null;
   try {
     payload = await fetchQishuiPcTrackV2(id, cookie);
   } catch (err) {
+    trackV2Error = err;
+    try {
+      payload = await fetchQishuiSeoTrack(id, cookie);
+      playbackSource = 'qishui-h5-seo-fallback';
+    } catch (fallbackError) {
     const checked = qishuiSessionExpired(err)
       ? { reauthRequired: true }
       : await fetchQishuiPlaybackMembership(cookie);
@@ -3527,8 +3544,9 @@ async function handleQishuiSongUrl(opts, cookieText) {
       isVip: false,
       isSvip: false,
       vipLabel: '未知会员状态',
-      rawError: err && err.message || String(err),
+      rawError: [err && err.message || String(err), fallbackError && fallbackError.message || String(fallbackError)].filter(Boolean).join('; '),
     });
+    }
   }
   let membership = qishuiPlaybackMembershipFromPayload(payload);
   if (!membership.membershipKnown) membership = await fetchQishuiPlaybackMembership(cookie);
@@ -3599,7 +3617,10 @@ async function handleQishuiSongUrl(opts, cookieText) {
         size: Number(stream.size) || 0,
         duration,
         requestedQuality,
-        source: 'qishui-pc-track-v2',
+        source: playbackSource,
+        fallbackReason: playbackSource === 'qishui-h5-seo-fallback' && trackV2Error
+          ? (trackV2Error.message || String(trackV2Error))
+          : '',
         encrypted: !!stream.auth,
       };
     } catch (err) {
@@ -3665,7 +3686,9 @@ module.exports = {
     rankQishuiPublicSongs,
     qishuiConvertLyric,
     extractQishuiLyrics,
+    fetchQishuiSeoTrack,
     collectQishuiTrackV2Streams,
+    resolveQishuiDownloadInfo,
     qishuiMembershipFromData,
     qishuiPlaybackMembershipFromPayload,
     qishuiMembershipCacheTtlMs,
