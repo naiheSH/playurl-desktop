@@ -3565,31 +3565,17 @@ async function handleQishuiSongUrl(opts, cookieText) {
   const cacheKey = 'track-v2|' + qishuiCookieFingerprint(cookie) + '|' + membershipKey + '|' + id + '|' + requestedQuality + '|' + requiredTier;
   return qishuiPlaybackCache.wrap(cacheKey, value => value.playable ? 4 * 60 * 1000 : 0, async () => {
     try {
-      if (!qishuiRequiredTierAllowed(requiredTier, membership)) {
-        const reason = !membership.membershipKnown
-          ? 'membership_unknown'
-          : (requiredTier === 'svip' ? 'svip_required' : 'vip_required');
-        const message = reason === 'membership_unknown'
-          ? '汽水音乐暂时无法验证当前账号的会员状态，请稍后重试。'
-          : (reason === 'svip_required'
-            ? '该汽水音乐歌曲或音质需要可验证的 SVIP 权益。'
-            : '该汽水音乐歌曲或音质需要可验证的 VIP 权益。');
-        return qishuiUnavailable(message, reason, {
-          loggedIn: true,
-          playbackKeyReady: true,
-          vipRequired: requiredTier !== 'free',
-          svipRequired: requiredTier === 'svip',
-          requiredTier,
-          membershipKnown: !!membership.membershipKnown,
-          vipType: membership.vipType || 0,
-          vipLevel: membership.vipLevel || (membership.membershipKnown ? 'none' : 'unknown'),
-          isVip: !!membership.isVip,
-          isSvip: !!membership.isSvip,
-          vipLabel: membership.vipLabel || (membership.membershipKnown ? '无VIP' : '未知会员状态'),
-          entitlementEvidence: trackRestriction.evidence.concat(requestRestriction.evidence),
-        });
+      let resolved;
+      try {
+        resolved = await resolveQishuiDownloadInfo(id, payload, cookie, membership);
+      } catch (primaryError) {
+        if (playbackSource !== 'qishui-pc-track-v2') throw primaryError;
+        const previewPayload = await fetchQishuiSeoTrack(id, cookie);
+        resolved = await resolveQishuiDownloadInfo(id, previewPayload, cookie, membership);
+        payload = previewPayload;
+        playbackSource = 'qishui-h5-seo-preview';
+        trackV2Error = primaryError;
       }
-      const resolved = await resolveQishuiDownloadInfo(id, payload, cookie, membership);
       const track = resolved.track || {};
       const stream = resolved.best;
       const duration = stream.duration || qishuiNormalizeDurationSeconds(track.duration_ms || track.duration || 0);
@@ -3618,7 +3604,7 @@ async function handleQishuiSongUrl(opts, cookieText) {
         duration,
         requestedQuality,
         source: playbackSource,
-        fallbackReason: playbackSource === 'qishui-h5-seo-fallback' && trackV2Error
+        fallbackReason: /^qishui-h5-seo-/.test(playbackSource) && trackV2Error
           ? (trackV2Error.message || String(trackV2Error))
           : '',
         encrypted: !!stream.auth,

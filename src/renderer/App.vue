@@ -20,13 +20,13 @@ const qualityMap: Record<MusicProvider, Quality[]> = {
     { id: 'jymaster', name: '母带', detail: 'Master', required: 'SVIP' },
     { id: 'hires', name: 'Hi-Res', detail: '高解析', required: 'VIP' },
     { id: 'lossless', name: '无损', detail: 'FLAC', required: 'VIP' },
-    { id: 'exhigh', name: '极高', detail: '320k', required: 'VIP' },
+    { id: 'exhigh', name: '极高', detail: '320k · 按歌曲实时确认' },
     { id: 'standard', name: '标准', detail: '128k' }
   ],
   qq: [
     { id: 'hires', name: 'Hi-Res', detail: '高解析', required: 'SVIP' },
     { id: 'lossless', name: '无损', detail: 'FLAC', required: 'VIP' },
-    { id: 'exhigh', name: '极高', detail: '320k', required: 'VIP' },
+    { id: 'exhigh', name: '极高', detail: '320k · 按歌曲实时确认' },
     { id: 'standard', name: '标准', detail: '128k' },
     { id: 'aac', name: 'AAC', detail: '节省流量' }
   ],
@@ -34,7 +34,7 @@ const qualityMap: Record<MusicProvider, Quality[]> = {
     { id: 'jymaster', name: '母带', detail: 'Master', required: 'SVIP' },
     { id: 'hires', name: 'Hi-Res', detail: '高解析', required: 'SVIP' },
     { id: 'lossless', name: '无损', detail: 'FLAC', required: 'VIP' },
-    { id: 'exhigh', name: '极高', detail: '320k', required: 'VIP' },
+    { id: 'exhigh', name: '极高', detail: '320k · 按歌曲实时确认' },
     { id: 'standard', name: '标准', detail: '128k' }
   ],
   qishui: [{ id: 'auto', name: '自动最佳', detail: '按账号权益' }]
@@ -90,7 +90,9 @@ function defaultQuality(id: MusicProvider): string {
   const fallback = choices[choices.length - 1]!
   if (account.isSvip) return choices[0]?.id || fallback.id
   if (account.isVip) return (choices.find((item) => item.required !== 'SVIP') || fallback).id
-  return (choices.find((item) => !item.required) || fallback).id
+  return (choices.find((item) => item.id === 'standard' || item.id === 'auto')
+    || choices.find((item) => !item.required)
+    || fallback).id
 }
 
 function stateFor(song: Song): RowState {
